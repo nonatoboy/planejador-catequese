@@ -287,14 +287,24 @@ function delLink(id,i){st(id).links.splice(i,1);saveState();render();}
 function setF(id,k,v){st(id)[k]=v;saveState();}
 function setCk(id,i,v){st(id).check[i]=v;saveState();render();}
 function exportar(){
-  const blob=new Blob([JSON.stringify({user,exportado_em:new Date().toISOString(),state},null,2)],{type:'application/json'});
+  const todas=sessoes().map(u=>({user:u,state:JSON.parse(localStorage.getItem(LS_STATE+u)||'{}')}));
+  const blob=new Blob([JSON.stringify({tipo:'completo',exportado_em:new Date().toISOString(),ativa:user,sessoes:todas},null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-  a.download='planejamento-catequese-'+new Date().toISOString().slice(0,10)+'.json';a.click();toast('Backup exportado');
+  a.download='planejamento-catequese-completo-'+new Date().toISOString().slice(0,10)+'.json';a.click();toast('Backup completo exportado ('+todas.length+' sessões)');
 }
 function importar(inp){
   const f=inp.files[0];if(!f)return;
   const r=new FileReader();
-  r.onload=()=>{try{const j=JSON.parse(r.result);if(!j.state)throw 0;state=j.state;saveState();render();toast('Backup importado ✓');}catch(e){toast('Arquivo inválido');}};
+  r.onload=()=>{try{
+    const j=JSON.parse(r.result);
+    if(j.tipo==='completo'&&Array.isArray(j.sessoes)){
+      j.sessoes.forEach(s=>{if(s.user){localStorage.setItem(LS_STATE+s.user,JSON.stringify(s.state||{}));addSessao(s.user);}});
+      if(j.ativa&&localStorage.getItem(LS_STATE+j.ativa)!==null){user=j.ativa;localStorage.setItem(LS_USER,user);}
+      loadState();render();toast('Backup importado: '+j.sessoes.length+' sessões ✓');
+    }else if(j.state){
+      state=j.state;saveState();render();toast('Backup importado ✓');
+    }else throw 0;
+  }catch(e){toast('Arquivo inválido');}};
   r.readAsText(f);
 }
 (function init(){
