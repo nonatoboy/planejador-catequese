@@ -41,6 +41,11 @@ main{max-width:900px;margin:0 auto;padding:16px}
 .item.arq{opacity:.6;border-left-color:#9ca3af}
 .sw{display:flex;align-items:center;gap:6px;font-size:.85rem;color:var(--mut);background:#fff;border:1.5px solid var(--borda);border-radius:10px;padding:8px 12px;cursor:pointer;user-select:none}
 .sw input{width:18px;height:18px;accent-color:var(--roxo)}
+#modal{display:none;position:fixed;inset:0;z-index:50}
+.m-back{position:absolute;inset:0;background:rgba(0,0,0,.45)}
+.m-box{position:relative;max-width:480px;margin:8vh auto;background:#fff;border-radius:14px;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,.25);max-height:80vh;overflow:auto}
+.m-box .item{margin-bottom:8px}
+@media(max-width:520px){.m-box{margin:4vh 12px}}
 .tag{display:inline-block;font-size:.72rem;background:#ede9fe;color:var(--roxo-esc);border-radius:6px;padding:2px 8px;margin:2px 4px 2px 0}
 .roteiro h2{font-size:1.15rem;margin-bottom:2px}
 .roteiro .when{color:var(--mut);font-size:.85rem;margin-bottom:12px}
@@ -98,7 +103,6 @@ function saveState(){localStorage.setItem(LS_STATE+user,JSON.stringify(state));}
 function st(id){if(!state[id])state[id]={status:'a_planejar',data:'',notas:'',check:{},links:[]};return state[id];}
 function sessoes(){try{return JSON.parse(localStorage.getItem(LS_SESSOES)||'[]')}catch(e){return[]}}
 function addSessao(u){const s=sessoes();if(!s.includes(u)){s.push(u);localStorage.setItem(LS_SESSOES,JSON.stringify(s));}}
-function delSessao(i,ev){ev.stopPropagation();const s=sessoes();const u=s[i];s.splice(i,1);localStorage.setItem(LS_SESSOES,JSON.stringify(s));if(localStorage.getItem(LS_USER)===u)localStorage.removeItem(LS_USER);render();}
 
 const CHECK_BASE=['Toalha da cor do Tempo Litúrgico no ambão','Vela acesa','Bíblia na Mesa da Palavra','Leitor escalado e passagem combinada','Flores / ornamento (escala da semana)','Materiais da dinâmica separados','História do encontro revisada','Imagem de Nossa Senhora / padroeiro (quem leva?)'];
 
@@ -120,8 +124,8 @@ function loginHTML(){
     <p style="color:var(--mut);font-size:.9rem;margin-bottom:18px">Catequese — 2ª Etapa (Profissão de Fé)</p>
     ${ss.length?`<div class="field"><label>Suas sessões</label>
       ${ss.map((u,i)=>{const [n,c]=u.split('|');return `<div class="item sessao" onclick="entrarSessao(${i})">
-        <div class="num">👤</div><div style="flex:1"><h3>${esc(n)}</h3><div class="sub">${esc(c)}</div></div>
-        <button class="del" title="Remover sessão" onclick="delSessao(${i},event)">✕</button></div>`;}).join('')}
+        <div class="num">👤</div><div style="flex:1"><h3>${esc(n)}</h3><div class="sub">${esc(c)}</div></div></div>`;}).join('')}
+      <button class="btn sec mini" style="margin-top:8px" onclick="gerenciar()">⚙️ Gerenciar sessões</button>
     </div>`:''}
     <div class="field"><label>${ss.length?'Nova sessão — seu nome (catequista)':'Seu nome (catequista)'}</label><input id="nome" placeholder="Ex.: Maria" autofocus></div>
     <div class="field"><label>Comunidade / turma (opcional)</label><input id="com" placeholder="Ex.: Turma B — sábado 9h"></div>
@@ -140,6 +144,69 @@ function entrarSessao(i){
   user=sessoes()[i];
   localStorage.setItem(LS_USER,user);loadState();render();
 }
+function gerenciar(){
+  const ss=sessoes();
+  const html=ss.map((u,i)=>{
+    const [n,c]=u.split('|');
+    const stt=JSON.parse(localStorage.getItem(LS_STATE+u)||'{}');
+    const nPlanejado=Object.values(stt).filter(x=>x.status==='planejado').length;
+    const nRealizado=Object.values(stt).filter(x=>x.status==='realizado').length;
+    const nArq=Object.values(stt).filter(x=>x.status==='arquivado').length;
+    const nLinks=Object.values(stt).reduce((a,x)=>a+((x.links||[]).length),0);
+    return `<div class="item sessao"><div class="num">👤</div>
+      <div style="flex:1"><h3>${esc(n)}</h3><div class="sub">${esc(c)} · ${nPlanejado} planejados · ${nRealizado} realizados · ${nArq} arquivados · ${nLinks} links</div></div>
+      <button class="btn mini" onclick="renomearSessao(${i})">Renomear</button>
+      <button class="btn mini" style="background:#b91c1c" onclick="confirmarExclusao(${i})">Excluir</button></div>`;
+  }).join('');
+  modal(`<h3 style="margin-bottom:4px">⚙️ Gerenciar sessões</h3>
+    <p style="font-size:.85rem;color:var(--mut);margin-bottom:12px">Excluir uma sessão apaga permanentemente o planejamento dela deste aparelho. Exporte um backup antes, se precisar.</p>
+    ${html}
+    <div style="text-align:right;margin-top:14px"><button class="btn sec mini" onclick="fecharModal()">Fechar</button></div>`);
+}
+function renomearSessao(i){
+  const u=sessoes()[i];const [n,c]=u.split('|');
+  modal(`<h3 style="margin-bottom:12px">Renomear sessão</h3>
+    <div class="field"><label>Nome do catequista</label><input id="rn-nome" value="${esc(n)}"></div>
+    <div class="field"><label>Comunidade / turma</label><input id="rn-com" value="${esc(c==='—'?'':c)}"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+      <button class="btn sec mini" onclick="fecharModal()">Cancelar</button>
+      <button class="btn mini" onclick="salvarRenome(${i})">Salvar</button></div>`);
+}
+function salvarRenome(i){
+  const n=$('#rn-nome').value.trim();
+  if(!n){toast('O nome não pode ficar vazio');return;}
+  const novo=n+'|'+($('#rn-com').value.trim()||'—');
+  const ss=sessoes();const antigo=ss[i];
+  const dados=localStorage.getItem(LS_STATE+antigo);
+  localStorage.setItem(LS_STATE+novo,dados||'{}');
+  if(antigo!==novo)localStorage.removeItem(LS_STATE+antigo);
+  ss[i]=novo;localStorage.setItem(LS_SESSOES,JSON.stringify(ss));
+  if(localStorage.getItem(LS_USER)===antigo){user=novo;localStorage.setItem(LS_USER,novo);loadState();}
+  fecharModal();render();toast('Sessão renomeada ✓');
+}
+function confirmarExclusao(i){
+  const u=sessoes()[i];const [n,c]=u.split('|');
+  modal(`<h3 style="margin-bottom:8px">⚠️ Excluir sessão</h3>
+    <p style="margin-bottom:8px">Excluir <b>${esc(n)}</b> — ${esc(c)}?</p>
+    <p style="font-size:.85rem;color:var(--mut);margin-bottom:14px">Todo o planejamento desta sessão (status, datas, notas, checklist e links) será apagado permanentemente deste aparelho. Esta ação não pode ser desfeita.</p>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn sec mini" onclick="fecharModal()">Cancelar</button>
+      <button class="btn mini" style="background:#b91c1c" onclick="excluirSessao(${i})">Excluir definitivamente</button></div>`);
+}
+function excluirSessao(i){
+  const s=sessoes();const u=s[i];
+  s.splice(i,1);localStorage.setItem(LS_SESSOES,JSON.stringify(s));
+  localStorage.removeItem(LS_STATE+u);
+  if(localStorage.getItem(LS_USER)===u){localStorage.removeItem(LS_USER);user=null;state={};}
+  fecharModal();render();toast('Sessão excluída');
+}
+function modal(conteudo){
+  let m=$('#modal');
+  if(!m){m=document.createElement('div');m.id='modal';document.body.appendChild(m);}
+  m.innerHTML=`<div class="m-back" onclick="fecharModal()"></div><div class="m-box">${conteudo}</div>`;
+  m.style.display='block';
+}
+function fecharModal(){const m=$('#modal');if(m)m.style.display='none';}
 function sair(){localStorage.removeItem(LS_USER);user=null;render();}
 
 function listHTML(){
