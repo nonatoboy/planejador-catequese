@@ -237,7 +237,7 @@ async function posLogin(){
   } else perfil={...c,igreja_nome:c.igrejas?c.igrejas.nome:''};
   // turmas associadas + turmas da minha igreja (para criar/aderir)
   const {data:tcs}=await sb.from('turma_catequista').select('turma_id,turmas(nome,igrejas(nome))').eq('catequista_id',perfil.id);
-  minhasTurmas=(tcs||[]).map(x=>({id:x.turma_id,nome:x.turmas?x.turmas.nome:'?',igreja:x.turmas&&x.turmas.igrejas?x.turmas.igrejas.nome:''}));
+  minhasTurmas=(tcs||[]).map(x=>({id:x.turma_id,nome:x.turmas?x.turmas.nome:'?',ano:x.turmas?x.turmas.ano_inicio:'',igreja:x.turmas&&x.turmas.igrejas?x.turmas.igrejas.nome:''}));
   const {data:tIgreja}=await sb.from('turmas').select('id,nome,ano_inicio').eq('igreja_id',perfil.igreja_id).order('nome');
   turmasIgreja=(tIgreja||[]).filter(t=>!minhasTurmas.some(m=>m.id===t.id));
   if(!minhasTurmas.length){
@@ -312,6 +312,14 @@ function modal(conteudo){
 function fecharModal(){const m=$('#modal');if(m)m.style.display='none';}
 
 
+function tituloHeader(){
+  if(!perfil||!turmaAtual)return '📖 Planejador de Encontros';
+  const t=minhasTurmas.find(x=>x.id===turmaAtual);
+  if(!t)return '📖 Planejador de Encontros';
+  const ig=t.igreja||perfil.igreja_nome||'';
+  const partes=[ig,t.nome,t.ano].filter(p=>p&&p!=='—');
+  return partes.length?partes.join(' - '):'📖 Planejador de Encontros';
+}
 function listHTML(){
   const ativos=DATA.filter(d=>st(d.id).status!=='arquivado');
   const planejados=ativos.filter(d=>st(d.id).status==='planejado').length;
@@ -320,7 +328,7 @@ function listHTML(){
   const pct=Math.round((planejados+realizados)/total*100);
   const [,com]=user.split('|');
   return `<header class="app"><div class="bar">
-    <h1>📖 Planejador — Catequese 2ª Etapa</h1>
+    <h1>${tituloHeader()}</h1>
     <div class="user">
       ${minhasTurmas.length?`<select id="sel-turma" onchange="trocarTurma(this.value)" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:5px 8px;font:inherit">
         ${minhasTurmas.map(t=>`<option value="${t.id}" ${t.id===turmaAtual?'selected':''}>${esc(t.nome)}</option>`).join('')}
