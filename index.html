@@ -104,7 +104,7 @@ const esc=s=>(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"
 function toast(m,ms){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._tm);t._tm=setTimeout(()=>t.classList.remove('show'),ms||2200);}
 // ---- ponte de IDs: app local ('e1'…) <-> banco (uuid) ----
 // casamento por ordem: a carga no banco seguiu a mesma sequência do DATA
-let idToUuid={}, uuidToId={};
+let idToUuid={}, uuidToId={}, linksGlobais={};
 async function carregarMapaEncontros(){
   const {data,error}=await sb.from('encontros').select('id,ordem').order('ordem');
   if(error){toast('Erro ao ler encontros: '+error.message);return;}
@@ -131,13 +131,23 @@ async function carregarTurma(){
     for(const te of (tes||[])){
       const local=uuidToId[te.encontro_id];
       if(!local)continue;
-      state[local]={status:te.status,data:te.data||'',notas:te.notas||'',check:{},links:[],te_id:te.id};
+      let chk={};
+      try{chk=te.checklist?JSON.parse(te.checklist):{}}catch(e){chk={}}
+      state[local]={status:te.status,data:te.data||'',notas:te.notas||'',check:chk,links:[],te_id:te.id};
     }
     const {data:tls,error:e2}=await sb.from('turma_links').select('*').eq('turma_id',turmaAtual);
     if(e2)throw e2;
     for(const l of (tls||[])){
       const local=uuidToId[l.encontro_id];
       if(local&&state[local])state[local].links.push({url:l.url,tipo:l.tipo,id:l.id});
+    }
+    // links pré-fixados pelo admin (globais, só leitura)
+    const {data:gls,error:e3}=await sb.from('encontro_links').select('encontro_id,url,tipo,titulo');
+    if(e3 && e3.code!=='42703'){throw e3;} // coluna titulo pode não existir ainda
+    linksGlobais={};
+    for(const l of (gls||[])){
+      const local=uuidToId[l.encontro_id];
+      if(local){(linksGlobais[local]=linksGlobais[local]||[]).push({url:l.url,tipo:l.tipo,titulo:l.titulo});}
     }
   }catch(e){toast('Erro ao carregar: '+e.message);}
   carregando=false;render();
@@ -154,7 +164,7 @@ async function upsertTE(id){
 async function salvarTE(id){
   const s=st(id);
   const te=await upsertTE(id);if(!te)return;
-  const {error}=await sb.from('turma_encontros').update({status:s.status,data:s.data||null,notas:s.notas||null}).eq('id',te);
+  const {error}=await sb.from('turma_encontros').update({status:s.status,data:s.data||null,notas:s.notas||null,checklist:JSON.stringify(s.check||{})}).eq('id',te);
   if(error)toast('Erro ao salvar: '+error.message);
 }
 async function addLinkDB(id,url,tipo){
@@ -325,8 +335,15 @@ function detailHTML(){
       <div style="margin-top:6px">${checks.map((c,i)=>`<div class="check"><input type="checkbox" id="ck${i}" ${s.check[i]?'checked':''} onchange="setCk('${d.id}',${i},this.checked)"><label for="ck${i}" class="${s.check[i]?'done':''}">${esc(c)}</label></div>`).join('')}</div>
     </div>
     ${d.prep?`<div class="card"><b>🕯️ Preparando o ambiente (subsídio)</b><p style="margin-top:6px;font-size:.92rem">${esc(d.prep)}</p></div>`:''}
+    ${(linksGlobais[d.id]||[]).length?`<div class="card">
+      <b>📌 Links do subsídio</b>
+      <div style="margin-top:6px">${linksGlobais[d.id].map(l=>{
+        const titulo=l.titulo||tituloDoLink(l.url);
+        return `<div class="lk"><span class="lk-b t-${l.tipo}">${TIPO_L[l.tipo]||TIPO_L.outro}</span><span style="flex:1;font-size:.88rem">${esc(titulo)}</span><a href="${esc(l.url)}" target="_blank" rel="noopener" title="Abrir link" style="font-size:1.05rem;text-decoration:none;padding:4px 6px">🔗</a></div>`;
+      }).join('')}</div>
+    </div>`:''}
     <div class="card">
-      <b>🔗 Links do encontro</b>
+      <b>🔗 Links da turma</b>
       <div id="links" style="margin-top:6px">${linksHTML(d.id)}</div>
       <div class="row" style="margin-top:10px;align-items:flex-end">
         <div class="field" style="flex:2"><label>Endereço (URL)</label><input id="lk-url" placeholder="https://…"></div>
@@ -360,6 +377,9 @@ function fmtBody(t){
 }
 function setStatus(id,v){st(id).status=v;salvarTE(id);toast(v==='realizado'?'Marcado como realizado ✓':v==='planejado'?'Marcado como planejado':v==='arquivado'?'Encontro arquivado — não aparece na lista (ative “Arquivados” para vê-lo)':'Voltou para “a planejar”');render();}
 const TIPO_L={musica:'🎵 Música',video:'🎬 Vídeo',atividade:'✂️ Atividade',outro:'📄 Outro'};
+function tituloDoLink(u){
+  try{const p=new URL(u);return p.hostname.replace(/^www\./,'');}catch(e){return u;}
+}
 function linksHTML(id){
   const lks=st(id).links||[];
   if(!lks.length)return '<p style="font-size:.85rem;color:var(--mut)">Nenhum link ainda. Adicione músicas, vídeos ou atividades abaixo.</p>';
@@ -374,7 +394,7 @@ async function addLink(id){
 }
 async function delLink(id,i){await delLinkDB(id,i);}
 function setF(id,k,v){st(id)[k]=v;salvarTE(id);}
-function setCk(id,i,v){st(id).check[i]=v;saveState();render();}
+function setCk(id,i,v){st(id).check[i]=v;salvarTE(id);render();}
 (async function init(){
   const {data:{user:u}}=await sb.auth.getUser();
   if(u)await posLogin();else render();
