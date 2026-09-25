@@ -425,7 +425,7 @@ async function carregarPresencas(id){
   const {data,error}=await sb.from('presencas').select('aluno_id,presente').eq('turma_encontro_id',te);
   if(error){toast('Erro ao ler presenças: '+error.message);return;}
   presencasCache[te]={};
-  (data||[]).forEach(p=>presencasCache[te][p.aluno_id]=p.presente);
+  (data||[]).forEach(p=>{if(p.presente)presencasCache[te][p.aluno_id]=true;});
 }
 async function setPresenca(id,alunoId,v){
   const te=teDe(id);if(!te){toast('Salve o planejamento do encontro primeiro (mude o status)');return;}
@@ -435,8 +435,19 @@ async function setPresenca(id,alunoId,v){
     if(error){toast('Erro: '+error.message);return;}
     presencasCache[te][alunoId]=true;
   }else{
-    const {error}=await sb.from('presencas').delete().eq('turma_encontro_id',te).eq('aluno_id',alunoId);
-    if(error){toast('Erro: '+error.message);return;}
+    // desmarcar: excluir a linha de presença
+    const {data:del,error}=await sb.from('presencas').delete()
+      .eq('turma_encontro_id',te).eq('aluno_id',alunoId).select();
+    if(error){toast('Erro ao desmarcar: '+error.message);return;}
+    if(!del||!del.length){
+      // nada foi excluído — a linha não existia com esses filtros; tentar por id
+      const {data:row,error:e2}=await sb.from('presencas').select('id').eq('turma_encontro_id',te).eq('aluno_id',alunoId).maybeSingle();
+      if(e2){toast('Erro ao localizar presença: '+e2.message);return;}
+      if(row){
+        const {error:e3}=await sb.from('presencas').delete().eq('id',row.id);
+        if(e3){toast('Erro ao excluir: '+e3.message);return;}
+      }
+    }
     delete presencasCache[te][alunoId];
   }
   render();
