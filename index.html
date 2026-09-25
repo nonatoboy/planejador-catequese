@@ -85,6 +85,14 @@ main{max-width:900px;margin:0 auto;padding:16px}
 .t-outro{background:#f3f4f6;color:var(--mut)}
 .lk .del{background:none;color:var(--mut);font-size:.9rem;padding:2px 6px}
 @media(min-width:700px){.item h3{font-size:1rem}}
+.aluno{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px dashed var(--borda)}
+.aluno:last-child{border-bottom:none}
+.aluno .nome{flex:1;font-size:.92rem}
+.aluno .nome.inativo{color:var(--mut);text-decoration:line-through}
+.aluno input[type=checkbox]{width:22px;height:22px;accent-color:var(--verde)}
+.aluno .del{background:none;color:var(--mut);font-size:.9rem;padding:2px 6px}
+.resumo-presenca{display:flex;gap:12px;font-size:.8rem;color:var(--mut);margin-top:8px}
+.resumo-presenca b{color:var(--txt)}
 </style>
 </head>
 <body>
@@ -104,7 +112,7 @@ const esc=s=>(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"
 function toast(m,ms){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._tm);t._tm=setTimeout(()=>t.classList.remove('show'),ms||2200);}
 // ---- ponte de IDs: app local ('e1'…) <-> banco (uuid) ----
 // casamento por ordem: a carga no banco seguiu a mesma sequência do DATA
-let idToUuid={}, uuidToId={}, linksGlobais={};
+let idToUuid={}, uuidToId={}, linksGlobais={}, alunos=[];
 async function carregarMapaEncontros(){
   const {data,error}=await sb.from('encontros').select('id,ordem').order('ordem');
   if(error){toast('Erro ao ler encontros: '+error.message);return;}
@@ -126,6 +134,10 @@ async function carregarTurma(){
   state={};
   try{
     await carregarMapaEncontros();
+    // alunos da turma
+    const {data:als,error:ea}=await sb.from('alunos').select('id,nome,data_nascimento,data_batismo,data_entrada,data_saida,motivo_saida,ativo,observacoes').eq('turma_id',turmaAtual).order('nome');
+    if(ea)throw ea;
+    alunos=als||[];
     const {data:tes,error:e1}=await sb.from('turma_encontros').select('*').eq('turma_id',turmaAtual);
     if(e1)throw e1;
     for(const te of (tes||[])){
@@ -303,7 +315,11 @@ function renderListItems(){
   }).join(''):'<div class="empty">Nenhum encontro encontrado com esse filtro.</div>';
 }
 async function trocarTurma(tid){turmaAtual=tid;view.screen='list';await carregarTurma();}
-function abrir(id){view.screen='detail';view.id=id;render();}
+async function abrir(id){
+  view.screen='detail';view.id=id;
+  await carregarPresencas(id);
+  render();
+}
 function voltar(){view.screen='list';render();}
 
 function detailHTML(){
@@ -335,6 +351,14 @@ function detailHTML(){
       <div style="margin-top:6px">${checks.map((c,i)=>`<div class="check"><input type="checkbox" id="ck${i}" ${s.check[i]?'checked':''} onchange="setCk('${d.id}',${i},this.checked)"><label for="ck${i}" class="${s.check[i]?'done':''}">${esc(c)}</label></div>`).join('')}</div>
     </div>
     ${d.prep?`<div class="card"><b>🕯️ Preparando o ambiente (subsídio)</b><p style="margin-top:6px;font-size:.92rem">${esc(d.prep)}</p></div>`:''}
+    <div class="card">
+      <b>📋 Chamada — presença dos alunos</b>
+      <div style="margin-top:6px" id="chamada">${chamadaHTML(d.id)}</div>
+      <div class="row" style="margin-top:10px;align-items:flex-end">
+        <div class="field" style="flex:2"><label>Novo aluno</label><input id="al-nome" placeholder="Nome do aluno"></div>
+        <div class="field" style="flex:0"><button class="btn" onclick="addAluno()">+ Adicionar</button></div>
+      </div>
+    </div>
     ${(linksGlobais[d.id]||[]).length?`<div class="card">
       <b>📌 Links do subsídio</b>
       <div style="margin-top:6px">${linksGlobais[d.id].map(l=>{
@@ -374,6 +398,66 @@ function fmtBody(t){
       .replace(/\*(.+?)\*/g,'<em>$1</em>')
       .replace(/(^|\s)\*(?=\s|$)/g,'$1')+'</p>';
   }).join('');
+}
+function chamadaHTML(id){
+  const ativos=alunos.filter(a=>a.ativo);
+  const inativos=alunos.filter(a=>!a.ativo);
+  const linha=(a,inas)=>{
+    const marcada=presencaDe(id,a.id);
+    return `<div class="aluno"><input type="checkbox" ${marcada?'checked':''} onchange="setPresenca('${id}','${a.id}',this.checked)"><span class="nome ${inas?'inativo':''}">${esc(a.nome)}${inas?' <span style="font-size:.7rem">(saiu)</span>':''}</span>${inas?'':`<button class="del" title="Registrar saída" onclick="saidaAluno('${a.id}')">🚪</button>`}</div>`;
+  };
+  const p=ativos.filter(a=>presencaDe(id,a.id)).length;
+  return (ativos.length||inativos.length)?
+    ativos.map(a=>linha(a,false)).join('')+
+    (inativos.length?`<p style="font-size:.75rem;color:var(--mut);margin:8px 0 2px">Alunos que saíram (histórico):</p>`+inativos.map(a=>linha(a,true)).join(''):'')+
+    `<div class="resumo-presenca"><span>Presentes: <b>${p}</b>/${ativos.length}</span></div>`
+    :'<p style="font-size:.85rem;color:var(--mut)">Nenhum aluno cadastrado nesta turma ainda.</p>';
+}
+function teDe(id){return st(id).te_id;}
+function presencaDe(id,alunoId){
+  const te=teDe(id);
+  return te&&presencasCache[te]&&presencasCache[te][alunoId]===true;
+}
+let presencasCache={};
+async function carregarPresencas(id){
+  const te=teDe(id);if(!te)return;
+  if(presencasCache[te])return;
+  const {data,error}=await sb.from('presencas').select('aluno_id,presente').eq('turma_encontro_id',te);
+  if(error){toast('Erro ao ler presenças: '+error.message);return;}
+  presencasCache[te]={};
+  (data||[]).forEach(p=>presencasCache[te][p.aluno_id]=p.presente);
+}
+async function setPresenca(id,alunoId,v){
+  const te=teDe(id);if(!te){toast('Salve o planejamento do encontro primeiro (mude o status)');return;}
+  if(!presencasCache[te])presencasCache[te]={};
+  if(v){
+    const {error}=await sb.from('presencas').upsert({turma_encontro_id:te,aluno_id:alunoId,presente:true});
+    if(error){toast('Erro: '+error.message);return;}
+    presencasCache[te][alunoId]=true;
+  }else{
+    const {error}=await sb.from('presencas').delete().eq('turma_encontro_id',te).eq('aluno_id',alunoId);
+    if(error){toast('Erro: '+error.message);return;}
+    delete presencasCache[te][alunoId];
+  }
+  render();
+}
+async function addAluno(){
+  const nome=$('#al-nome').value.trim();
+  if(!nome){toast('Digite o nome do aluno');return;}
+  const {data,error}=await sb.from('alunos').insert({turma_id:turmaAtual,nome}).select().single();
+  if(error){toast('Erro: '+error.message);return;}
+  alunos.push(data);alunos.sort((a,b)=>a.nome.localeCompare(b.nome));
+  render();toast('Aluno cadastrado ✓');
+}
+async function saidaAluno(alunoId){
+  const a=alunos.find(x=>x.id===alunoId);if(!a)return;
+  const data=prompt('Data de saída (AAAA-MM-DD) — Enter para hoje:',new Date().toISOString().slice(0,10));
+  if(data===null)return;
+  const motivo=prompt('Motivo da saída (opcional):')||null;
+  const {error}=await sb.from('alunos').update({ativo:false,data_saida:data||new Date().toISOString().slice(0,10),motivo_saida:motivo}).eq('id',alunoId);
+  if(error){toast('Erro: '+error.message);return;}
+  a.ativo=false;a.data_saida=data;a.motivo_saida=motivo;
+  render();toast('Saída registrada — histórico preservado');
 }
 function setStatus(id,v){st(id).status=v;salvarTE(id);toast(v==='realizado'?'Marcado como realizado ✓':v==='planejado'?'Marcado como planejado':v==='arquivado'?'Encontro arquivado — não aparece na lista (ative “Arquivados” para vê-lo)':'Voltou para “a planejar”');render();}
 const TIPO_L={musica:'🎵 Música',video:'🎬 Vídeo',atividade:'✂️ Atividade',outro:'📄 Outro'};
