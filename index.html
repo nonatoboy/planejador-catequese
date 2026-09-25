@@ -101,7 +101,7 @@ let user=null, state={}, view={screen:'list', id:null, q:'', filtro:'todos', mos
 
 const $=s=>document.querySelector(s);
 const esc=s=>(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
+function toast(m,ms){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._tm);t._tm=setTimeout(()=>t.classList.remove('show'),ms||2200);}
 // ---- ponte de IDs: app local ('e1'…) <-> banco (uuid) ----
 // casamento por ordem: a carga no banco seguiu a mesma sequência do DATA
 let idToUuid={}, uuidToId={};
@@ -143,6 +143,8 @@ async function carregarTurma(){
   carregando=false;render();
 }
 async function upsertTE(id){
+  if(!turmaAtual){toast('Nenhuma turma associada à sua conta — solicite ao coordenador');return null;}
+  if(!idToUuid[id]){toast('Mapa de encontros ainda não carregado — recarregue a página');return null;}
   const s=st(id);
   if(s.te_id)return s.te_id;
   const {data,error}=await sb.from('turma_encontros').insert({turma_id:turmaAtual,encontro_id:idToUuid[id],status:s.status,data:s.data||null,notas:s.notas||null}).select().single();
@@ -214,7 +216,9 @@ async function posLogin(){
   // turmas do catequista
   const {data:tcs}=await sb.from('turma_catequista').select('turma_id,turmas(nome,igrejas(nome))').eq('catequista_id',perfil.id);
   minhasTurmas=(tcs||[]).map(x=>({id:x.turma_id,nome:x.turmas?x.turmas.nome:'?',igreja:x.turmas&&x.turmas.igrejas?x.turmas.igrejas.nome:''}));
-  if(!minhasTurmas.length){toast('Nenhuma turma associada — solicite ao coordenador');}
+  if(!minhasTurmas.length){
+    toast('Nenhuma turma associada à sua conta — o planejamento ficará bloqueado até a associação',6000);
+  }
   turmaAtual=minhasTurmas.length?minhasTurmas[0].id:null;
   user=perfil.nome;
   if(turmaAtual)await carregarTurma();else render();
