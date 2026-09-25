@@ -104,7 +104,7 @@ const DATA = [{"id": "c0", "num": null, "kind": "celebracao", "title": "Celebra�
 const SUPABASE_URL='https://zykvhpheswpfdcwytlyy.supabase.co';
 const SUPABASE_KEY='sb_publishable_2zWxpY122ArXbPZaGyiIGA_YXkUCupc';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-let perfil=null, turmaAtual=null, minhasTurmas=[];
+let perfil=null, turmaAtual=null, minhasTurmas=[], turmasIgreja=[];
 let user=null, state={}, view={screen:'list', id:null, q:'', filtro:'todos', mostrarArq:false};
 
 const $=s=>document.querySelector(s);
@@ -226,20 +226,22 @@ async function entrar(){
 async function posLogin(){
   const {data:{user:u}}=await sb.auth.getUser();
   if(!u)return;
-  const {data:c,error:e}=await sb.from('catequistas').select('id,nome,igreja_id').eq('auth_uid',u.id).maybeSingle();
+  const {data:c,error:e}=await sb.from('catequistas').select('id,nome,igreja_id,igrejas(nome)').eq('auth_uid',u.id).maybeSingle();
   if(e){toast('Erro no perfil: '+e.message);return;}
   if(!c){
     // 1º login: criar perfil (igreja de exemplo como padrão; admin ajusta depois)
     const {data:ig}=await sb.from('igrejas').select('id').limit(1).maybeSingle();
     const {data:nc,error:ne}=await sb.from('catequistas').insert({auth_uid:u.id,nome:u.email.split('@')[0],email:u.email,igreja_id:ig?ig.id:null}).select().single();
     if(ne){toast('Erro ao criar perfil: '+ne.message);return;}
-    perfil=nc;
-  } else perfil=c;
-  // turmas do catequista
+    perfil={...nc,igreja_nome:''};
+  } else perfil={...c,igreja_nome:c.igrejas?c.igrejas.nome:''};
+  // turmas associadas + turmas da minha igreja (para criar/aderir)
   const {data:tcs}=await sb.from('turma_catequista').select('turma_id,turmas(nome,igrejas(nome))').eq('catequista_id',perfil.id);
   minhasTurmas=(tcs||[]).map(x=>({id:x.turma_id,nome:x.turmas?x.turmas.nome:'?',igreja:x.turmas&&x.turmas.igrejas?x.turmas.igrejas.nome:''}));
+  const {data:tIgreja}=await sb.from('turmas').select('id,nome,ano_inicio').eq('igreja_id',perfil.igreja_id).order('nome');
+  turmasIgreja=(tIgreja||[]).filter(t=>!minhasTurmas.some(m=>m.id===t.id));
   if(!minhasTurmas.length){
-    toast('Nenhuma turma associada à sua conta — o planejamento ficará bloqueado até a associação',6000);
+    toast('Você ainda não participa de nenhuma turma — crie uma ou adira a uma existente no menu ▼',6000);
   }
   turmaAtual=minhasTurmas.length?minhasTurmas[0].id:null;
   user=perfil.nome;
@@ -247,6 +249,60 @@ async function posLogin(){
 }
 async function sair(){await sb.auth.signOut();user=null;perfil=null;turmaAtual=null;state={};render();}
 
+async function gerenciarTurmas(){
+  // recarregar dados frescos
+  const {data:tcs}=await sb.from('turma_catequista').select('turma_id,turmas(nome,ano_inicio)').eq('catequista_id',perfil.id);
+  minhasTurmas=(tcs||[]).map(x=>({id:x.turma_id,nome:x.turmas?x.turmas.nome:'?',ano:x.turmas?x.turmas.ano_inicio:''}));
+  const {data:tI}=await sb.from('turmas').select('id,nome,ano_inicio').eq('igreja_id',perfil.igreja_id).order('nome');
+  turmasIgreja=(tI||[]).filter(t=>!minhasTurmas.some(m=>m.id===t.id));
+  const htmlMinhas=minhasTurmas.length?minhasTurmas.map((t,i)=>`<div class="aluno">
+      <span class="nome">${esc(t.nome)} <span style="color:var(--mut);font-size:.75rem">· ${t.ano}</span></span>
+      <button class="btn mini" onclick="abrirTurma(${i})">Abrir</button>
+      <button class="btn mini" style="background:#b91c1c" onclick="sairTurma('${t.id}')">Sair</button></div>`).join('')
+    :'<p style="font-size:.85rem;color:var(--mut)">Você não participa de nenhuma turma.</p>';
+  const htmlOutras=turmasIgreja.length?`<p style="font-size:.8rem;font-weight:700;margin:14px 0 6px">Turmas da sua igreja — adira a uma:</p>`+
+    turmasIgreja.map((t,i)=>`<div class="aluno"><span class="nome">${esc(t.nome)} <span style="color:var(--mut);font-size:.75rem">· ${t.ano}</span></span>
+      <button class="btn mini" onclick="aderirTurma('${t.id}')">Adirir</button></div>`).join(''):'';
+  modal(`<h3 style="margin-bottom:4px">▼ Turmas</h3>
+    <p style="font-size:.8rem;color:var(--mut);margin-bottom:10px">Igreja: <b>${esc(perfil.igreja_nome||'')}</b></p>
+    ${htmlMinhas}${htmlOutras}
+    <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--borda)">
+      <b style="font-size:.9rem">Criar nova turma</b>
+      <div class="row" style="margin-top:8px;align-items:flex-end">
+        <div class="field" style="flex:2"><label>Nome</label><input id="nt-nome" placeholder="Ex.: Turma São José"></div>
+        <div class="field" style="flex:1"><label>Ano de início</label><input id="nt-ano" type="number" value="${new Date().getFullYear()}"></div>
+        <div class="field" style="flex:0"><button class="btn" onclick="criarTurma()">Criar</button></div>
+      </div>
+      <p style="font-size:.75rem;color:var(--mut)">A turma nasce na 2ª Etapa (etapa atual do material). O nome + ano identifica a turma na igreja.</p>
+    </div>
+    <div style="text-align:right;margin-top:10px"><button class="btn sec mini" onclick="fecharModal()">Fechar</button></div>`);
+}
+async function abrirTurma(i){
+  turmaAtual=minhasTurmas[i].id;fecharModal();view.screen='list';await carregarTurma();
+}
+async function aderirTurma(tid){
+  const {error}=await sb.from('turma_catequista').insert({turma_id:tid,catequista_id:perfil.id,papel:'catequista'});
+  if(error){toast('Erro: '+error.message);return;}
+  toast('Você entrou na turma ✓');fecharModal();await posLogin();view.screen='list';await carregarTurma();
+}
+async function sairTurma(tid){
+  if(!confirm('Sair desta turma? Seu planejamento nela será mantido no banco, mas você deixará de vê-la.'))return;
+  const {error}=await sb.from('turma_catequista').delete().eq('turma_id',tid).eq('catequista_id',perfil.id);
+  if(error){toast('Erro: '+error.message);return;}
+  fecharModal();await posLogin();
+}
+async function criarTurma(){
+  const nome=$('#nt-nome').value.trim(), ano=parseInt($('#nt-ano').value)||new Date().getFullYear();
+  if(!nome){toast('Digite o nome da turma');return;}
+  const {data:t,error:e1}=await sb.from('turmas').insert({igreja_id:perfil.igreja_id,nome,ano_inicio:ano}).select().single();
+  if(e1){toast('Erro: '+e1.message);return;}
+  // etapa 2 como etapa atual (material em uso)
+  const {data:et}=await sb.from('etapas').select('id').eq('numero',2).maybeSingle();
+  if(et){await sb.from('turma_etapas').insert({turma_id:t.id,etapa_id:et.id});}
+  // associar o criador
+  await sb.from('turma_catequista').insert({turma_id:t.id,catequista_id:perfil.id,papel:'titular'});
+  toast('Turma criada ✓');fecharModal();await posLogin();view.screen='list';await carregarTurma();
+}
 function modal(conteudo){
   let m=$('#modal');
   if(!m){m=document.createElement('div');m.id='modal';document.body.appendChild(m);}
@@ -266,9 +322,10 @@ function listHTML(){
   return `<header class="app"><div class="bar">
     <h1>📖 Planejador — Catequese 2ª Etapa</h1>
     <div class="user">
-      ${minhasTurmas.length>1?`<select id="sel-turma" onchange="trocarTurma(this.value)" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:5px 8px;font:inherit">
+      ${minhasTurmas.length?`<select id="sel-turma" onchange="trocarTurma(this.value)" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:5px 8px;font:inherit">
         ${minhasTurmas.map(t=>`<option value="${t.id}" ${t.id===turmaAtual?'selected':''}>${esc(t.nome)}</option>`).join('')}
-      </select>`:minhasTurmas.length===1?`<span>${esc(minhasTurmas[0].nome)}</span>`:''}
+        <option value="__gerenciar__">▼ Turmas…</option>
+      </select>`:`<button class="btn mini" style="background:rgba(255,255,255,.15)" onclick="gerenciarTurmas()">▼ Turmas…</button>`}
       <span>${esc(user)}</span>
       <button class="btn mini" style="background:rgba(255,255,255,.15)" onclick="sair()">Sair</button></div>
   </div></header>
@@ -314,7 +371,10 @@ function renderListItems(){
       ${s.data?`<div class="sub">📅 marcado para ${esc(s.data)}</div>`:''}</div></div>`;
   }).join(''):'<div class="empty">Nenhum encontro encontrado com esse filtro.</div>';
 }
-async function trocarTurma(tid){turmaAtual=tid;view.screen='list';await carregarTurma();}
+async function trocarTurma(tid){
+  if(tid==='__gerenciar__'){gerenciarTurmas();return;}
+  turmaAtual=tid;view.screen='list';await carregarTurma();
+}
 async function abrir(id){
   view.screen='detail';view.id=id;
   await carregarPresencas(id);
