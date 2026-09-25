@@ -236,7 +236,7 @@ async function posLogin(){
     perfil={...nc,igreja_nome:''};
   } else perfil={...c,igreja_nome:c.igrejas?c.igrejas.nome:''};
   // turmas associadas + turmas da minha igreja (para criar/aderir)
-  const {data:tcs}=await sb.from('turma_catequista').select('turma_id,turmas(nome,igrejas(nome))').eq('catequista_id',perfil.id);
+  const {data:tcs}=await sb.from('turma_catequista').select('turma_id,turmas(nome,ano_inicio,igrejas(nome))').eq('catequista_id',perfil.id);
   minhasTurmas=(tcs||[]).map(x=>({id:x.turma_id,nome:x.turmas?x.turmas.nome:'?',ano:x.turmas?x.turmas.ano_inicio:'',igreja:x.turmas&&x.turmas.igrejas?x.turmas.igrejas.nome:''}));
   const {data:tIgreja}=await sb.from('turmas').select('id,nome,ano_inicio').eq('igreja_id',perfil.igreja_id).order('nome');
   turmasIgreja=(tIgreja||[]).filter(t=>!minhasTurmas.some(m=>m.id===t.id));
@@ -251,7 +251,7 @@ async function sair(){await sb.auth.signOut();user=null;perfil=null;turmaAtual=n
 
 async function gerenciarTurmas(){
   // recarregar dados frescos
-  const {data:tcs}=await sb.from('turma_catequista').select('turma_id,turmas(nome,ano_inicio)').eq('catequista_id',perfil.id);
+  const {data:tcs}=await sb.from('turma_catequista').select('turma_id,turmas(nome,ano_inicio,igrejas(nome))').eq('catequista_id',perfil.id);
   minhasTurmas=(tcs||[]).map(x=>({id:x.turma_id,nome:x.turmas?x.turmas.nome:'?',ano:x.turmas?x.turmas.ano_inicio:''}));
   const {data:tI}=await sb.from('turmas').select('id,nome,ano_inicio').eq('igreja_id',perfil.igreja_id).order('nome');
   turmasIgreja=(tI||[]).filter(t=>!minhasTurmas.some(m=>m.id===t.id));
