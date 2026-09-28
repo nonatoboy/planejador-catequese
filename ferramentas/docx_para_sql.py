@@ -4,7 +4,7 @@ Converte o subsídio de uma etapa (arquivo .docx) em SQL para a tabela `encontro
 
 Uso:
     pip install pypandoc_binary beautifulsoup4
-    python3 ferramentas/docx_para_sql.py ETAPA arquivo.docx [--atualizar] [-o saida.sql]
+    python3 ferramentas/docx_para_sql.py ETAPA arquivo.docx [--atualizar] [-o saida.sql] [--max-kb 60]
 
     ETAPA        número da etapa (1 a 4)
     --atualizar  gera UPDATEs (casando pela coluna `ordem`) em vez de INSERTs —
@@ -221,40 +221,56 @@ def materiais_de(fora):
 
 
 def q(v):
-    return 'null' if v is None else "'" + str(v).replace("'", "''") + "'"
+    # tudo numa linha só: o editor do Supabase pode quebrar scripts longos em pedaços
+    return 'null' if v is None else "'" + str(v).replace('\r', '').replace('\n', ' ').replace("'", "''") + "'"
 
 
-def gerar_sql(etapa, encontros, materiais, atualizar):
-    linhas = [f'-- Gerado por ferramentas/docx_para_sql.py — etapa {etapa}, {len(encontros)} encontros/celebrações',
-              'begin;']
+def gerar_comandos(etapa, encontros, materiais, atualizar):
+    """Um comando SQL por linha; cada comando pode ser reexecutado sem efeito colateral."""
     sel_etapa = f'(select id from etapas where numero={etapa})'
+    guarda = None
+    cmds = []
     if atualizar:
-        linhas.append(f"""do $$ begin
-  if (select count(*) from encontros where etapa_id={sel_etapa}) <> {len(encontros)} then
-    raise exception 'A etapa {etapa} não tem {len(encontros)} encontros no banco — a atualização por ordem não é segura.';
-  end if;
-end $$;""")
+        guarda = (f"do $$ begin if (select count(*) from encontros where etapa_id={sel_etapa}) <> {len(encontros)} then "
+                  f"raise exception 'A etapa {etapa} não tem {len(encontros)} encontros no banco — a atualização por ordem não é segura.'; end if; end $$;")
         for i, e in enumerate(encontros, 1):
-            linhas.append(f"-- ordem {i}: {e['titulo'][:70]}\n"
-                          f"update encontros set conteudo_html={q(e['conteudo_html'])}, preparo_html={q(e['preparo_html'])}, atualizado_em=now()\n"
-                          f" where etapa_id={sel_etapa} and ordem={i};")
+            cmds.append(f"update encontros set conteudo_html={q(e['conteudo_html'])}, preparo_html={q(e['preparo_html'])}, atualizado_em=now() "
+                        f"where etapa_id={sel_etapa} and ordem={i}; -- {e['titulo'][:60]}")
     else:
-        linhas.append(f"""do $$ begin
-  if exists (select 1 from encontros where etapa_id={sel_etapa}) then
-    raise exception 'A etapa {etapa} já possui encontros cadastrados — use --atualizar ou remova-os antes.';
-  end if;
-end $$;""")
         for i, e in enumerate(encontros, 1):
-            linhas.append(f"-- {i}: {e['titulo'][:70]}\n"
-                          "insert into encontros (etapa_id, numero, tipo, titulo, tempo_liturgico, leitura_biblica, conteudo_html, preparo_html, ordem) values\n"
-                          f" ({sel_etapa}, {e['numero'] if e['numero'] is not None else 'null'}, {q(e['tipo'])}, {q(e['titulo'])}, "
-                          f"{q(e['tempo_liturgico'])}, {q(e['leitura_biblica'])}, {q(e['conteudo_html'])}, {q(e['preparo_html'])}, {i});")
-    # material de referência: não tem dados dependentes, então é sempre substituído por inteiro
-    linhas.append(f"\n-- material de referência ({len(materiais)} textos)\ndelete from etapa_materiais where etapa_id={sel_etapa};")
+            cmds.append("insert into encontros (etapa_id, numero, tipo, titulo, tempo_liturgico, leitura_biblica, conteudo_html, preparo_html, ordem) "
+                        f"select {sel_etapa}, {e['numero'] if e['numero'] is not None else 'null'}, {q(e['tipo'])}, {q(e['titulo'])}, "
+                        f"{q(e['tempo_liturgico'])}, {q(e['leitura_biblica'])}, {q(e['conteudo_html'])}, {q(e['preparo_html'])}, {i} "
+                        f"where not exists (select 1 from encontros where etapa_id={sel_etapa} and ordem={i}); -- {e['titulo'][:60]}")
+    # material de referência: sem dados dependentes, cada texto é substituído pela sua posição
     for i, m in enumerate(materiais, 1):
-        linhas.append(f"insert into etapa_materiais (etapa_id, titulo, conteudo_html, ordem) values ({sel_etapa}, {q(m['titulo'])}, {q(m['conteudo_html'])}, {i});")
-    linhas.append('commit;')
-    return '\n'.join(linhas) + '\n'
+        cmds.append(f"delete from etapa_materiais where etapa_id={sel_etapa} and ordem={i}; "
+                    f"insert into etapa_materiais (etapa_id, titulo, conteudo_html, ordem) values ({sel_etapa}, {q(m['titulo'])}, {q(m['conteudo_html'])}, {i}); -- material: {m['titulo'][:50]}")
+    return guarda, cmds
+
+
+def gerar_partes(etapa, encontros, materiais, atualizar, max_kb):
+    """Divide os comandos em scripts de até max_kb, cada um com sua própria transação."""
+    guarda, cmds = gerar_comandos(etapa, encontros, materiais, atualizar)
+    grupos, atual, tam = [], [], 0
+    for c in cmds:
+        n = len(c.encode('utf-8'))
+        if atual and tam + n > max_kb * 1024:
+            grupos.append(atual)
+            atual, tam = [], 0
+        atual.append(c)
+        tam += n
+    if atual:
+        grupos.append(atual)
+    partes = []
+    for k, g in enumerate(grupos, 1):
+        cab = [f'-- Gerado por ferramentas/docx_para_sql.py — etapa {etapa}, parte {k} de {len(grupos)}',
+               '-- Pode ser executado mais de uma vez; as partes podem ser executadas em qualquer ordem.',
+               'begin;']
+        if guarda:
+            cab.append(guarda)
+        partes.append('\n'.join(cab + g + ['commit;']) + '\n')
+    return partes
 
 
 def main():
@@ -262,7 +278,8 @@ def main():
     ap.add_argument('etapa', type=int, choices=[1, 2, 3, 4])
     ap.add_argument('docx')
     ap.add_argument('--atualizar', action='store_true')
-    ap.add_argument('-o', '--saida')
+    ap.add_argument('-o', '--saida', help='arquivo .sql; se o conteúdo passar de --max-kb, gera _parte1.sql, _parte2.sql…')
+    ap.add_argument('--max-kb', type=int, default=60, help='tamanho máximo de cada script (padrão: 60 KB)')
     args = ap.parse_args()
 
     relatorio = {'notas': [], 'ilegiveis': []}
@@ -288,12 +305,15 @@ def main():
     for m in materiais:
         print(f"  - {m['titulo'][:70]} ({len(m['conteudo_html'])} car.)", file=err)
 
-    sql = gerar_sql(args.etapa, encontros, materiais, args.atualizar)
+    partes = gerar_partes(args.etapa, encontros, materiais, args.atualizar, args.max_kb)
     if args.saida:
-        open(args.saida, 'w', encoding='utf-8').write(sql)
-        print(f'\nSQL gravado em {args.saida}', file=err)
+        base = args.saida[:-4] if args.saida.endswith('.sql') else args.saida
+        nomes = [args.saida] if len(partes) == 1 else [f'{base}_parte{k}.sql' for k in range(1, len(partes) + 1)]
+        for nome, sql in zip(nomes, partes):
+            open(nome, 'w', encoding='utf-8').write(sql)
+            print(f'SQL gravado em {nome} ({len(sql.encode("utf-8")) // 1024} KB)', file=err)
     else:
-        sys.stdout.write(sql)
+        sys.stdout.write('\n'.join(partes))
 
 
 if __name__ == '__main__':

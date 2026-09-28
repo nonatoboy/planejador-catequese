@@ -9,16 +9,16 @@ Todo o conteúdo das etapas fica **no banco** (`encontros` e `etapa_materiais`);
 |---|---|
 | `index.html` | O app |
 | `sql/01_multietapas.sql` | Preparação do banco para as 4 etapas (executar uma vez) |
-| `sql/02_etapa2_conteudo_html.sql` | Texto da 2ª etapa em HTML + material de referência (gerado a partir do .docx) |
+| `sql/02_etapa2_parte1.sql` … `parte8.sql` | Texto da 2ª etapa em HTML + material de referência (gerado a partir do .docx) |
 | `ferramentas/docx_para_sql.py` | Conversor do subsídio (.docx) em SQL |
 
 ## Publicação desta versão (ordem obrigatória)
 
 1. No **SQL Editor** do Supabase, executar `sql/01_multietapas.sql`.
-2. Executar `sql/02_etapa2_conteudo_html.sql`.
+2. Executar `sql/02_etapa2_parte1.sql` até `parte8.sql`, um arquivo por vez (abra, copie todo o conteúdo, cole numa consulta nova e clique em Run).
 3. Só então levar o `index.html` novo para a `main` (merge da branch).
 
-Os scripts 01 e 02 são compatíveis com a versão atual do app e podem ser reexecutados sem problema.
+Os scripts são compatíveis com a versão atual do app. Todos podem ser reexecutados sem problema, e as partes do 02 podem rodar em qualquer ordem: se uma falhar, basta executá-la de novo.
 
 ## Cadastro de um novo catequista (administrador)
 
@@ -49,10 +49,10 @@ Um usuário sem esse cadastro vê a mensagem "Sua conta ainda não foi configura
 
 ```bash
 pip install pypandoc_binary beautifulsoup4
-python3 ferramentas/docx_para_sql.py 1 Etapa1.docx -o sql/03_etapa1.sql
+python3 ferramentas/docx_para_sql.py 1 Etapa1.docx -o sql/03_etapa1.sql   # gera sql/03_etapa1_parte1.sql, …
 ```
 
 O relatório mostra os encontros encontrados (número, título, tempo litúrgico, leitura), as notas removidas e os trechos `[ILEGÍVEL]`.
 Revise-o antes de executar o SQL.
-O script se recusa a rodar se a etapa já tiver encontros.
+Os scripts são divididos em partes de até 60 KB, com um comando por linha, porque o editor do Supabase falha com scripts muito longos. Reexecutar uma parte não duplica encontros.
 Para **regravar o texto** de uma etapa já carregada, preservando planejamento e presenças, use `--atualizar`: ele casa os encontros pela coluna `ordem`.
