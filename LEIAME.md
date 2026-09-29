@@ -10,6 +10,7 @@ Todo o conteúdo das etapas fica **no banco** (`encontros` e `etapa_materiais`);
 | `index.html` | O app |
 | `sql/01_multietapas.sql` | Preparação do banco para as 4 etapas (executar uma vez) |
 | `sql/02_etapa2_parte1.sql` … `parte8.sql` | Texto da 2ª etapa em HTML + material de referência (gerado a partir do .docx) |
+| `sql/03_etapa3_parte1.sql` … `parte7.sql` | 3ª etapa: encontros + material de referência |
 | `ferramentas/docx_para_sql.py` | Conversor do subsídio (.docx) em SQL |
 
 ## Publicação desta versão (ordem obrigatória)
@@ -39,7 +40,8 @@ Um usuário sem esse cadastro vê a mensagem "Sua conta ainda não foi configura
 
 ### Preparação do .docx
 
-- Título de cada encontro ou celebração com o estilo **Título 3**: `1º Encontro – Título`, `Celebração de …` ou `Encontro de …`.
+- Título de cada encontro ou celebração com estilo de título (**Título 1**, **2** ou **3**): `1º Encontro – Título`, `Celebração de …` ou `Encontro de …`.
+  O título também pode vir no parágrafo ou título seguinte (`1º Encontro` + `A história continua`), como na 3ª etapa.
 - Logo abaixo, se houver: `(Encontro a ser realizado na 1ª SEMANA DO ADVENTO)`.
 - Seções no formato `Palavra inicial: …`, `Preparando o ambiente: …`, `Leitura do texto bíblico: Ez 34,11-12. …`.
 - Apresentação e anexos também com títulos em **Título 3**. Cada título vira um texto do "Material de referência".

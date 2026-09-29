@@ -27,15 +27,21 @@ Um relatório (stderr) lista os encontros encontrados, os metadados extraídos e
 as notas removidas — revise-o antes de executar o SQL no Supabase.
 """
 import argparse
+import os
 import re
 import sys
+import tempfile
+import zipfile
 
 import pypandoc
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 # ---------- padrões ----------
 RE_PAGINA = re.compile(r'^[—–-]+\s*P[áa]gina\s+\d+.*[—–-]+$', re.I)
-RE_NOTA = re.compile(r'^[\[(]\s*(Nota|Texto na margem|continua[çc][ãa]o)\b.*[\])]\.?$', re.I | re.S)
+# notas de transcrição: parágrafo inteiro entre colchetes ([Nota de rodapé], [Ilustração: …], [continuação] …)
+# ou "(Nota: …)"; o texto das notas de rodapé em si ("¹ Oração extraída…") é mantido
+# (começa com "[" + letra, para não confundir com citações que começam com "[...]")
+RE_NOTA = re.compile(r'^(\[\s*[A-Za-zÀ-ú].*\]|\(\s*Nota\b.*\))\.?$', re.I | re.S)
 RE_ILEGIVEL = re.compile(r'\[ILEG[ÍI]VEL\]', re.I)
 RE_CONTINUACAO = re.compile(r'\(Continua[çc][ãa]o\)\s*$', re.I)
 RE_NUM_ENCONTRO = re.compile(r'^(\d+)\s*[ºo°]\s*Encontro\b\s*[–—:\-]?\s*(.*)$', re.I)
@@ -59,8 +65,35 @@ def texto(el):
     return re.sub(r'\s+', ' ', el.get_text(' ') if isinstance(el, Tag) else str(el)).strip()
 
 
+def corrigir_estilos(caminho):
+    """Alguns .docx (gerados por ferramentas de conversão) têm estilos duplicados e não
+    definem o estilo base "Normal"; nesse caso o pandoc ignora todos os títulos.
+    Devolve uma cópia corrigida do arquivo (ou o próprio caminho, se não houver o que corrigir)."""
+    with zipfile.ZipFile(caminho) as z:
+        estilos = z.read('word/styles.xml').decode('utf-8')
+        vistos = set()
+
+        def primeira(m):
+            if m.group(1) in vistos:
+                return ''
+            vistos.add(m.group(1))
+            return m.group(0)
+        novo = re.sub(r'<w:style [^>]*w:styleId="([^"]+)"[^>]*>.*?</w:style>', primeira, estilos, flags=re.S)
+        if 'w:styleId="Normal"' not in novo:
+            novo = novo.replace('</w:docDefaults>', '</w:docDefaults><w:style w:type="paragraph" w:default="1" '
+                                'w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>', 1)
+        if novo == estilos:
+            return caminho
+        fd, tmp = tempfile.mkstemp(suffix='.docx')
+        os.close(fd)
+        with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as saida:
+            for item in z.infolist():
+                saida.writestr(item, novo.encode('utf-8') if item.filename == 'word/styles.xml' else z.read(item.filename))
+        return tmp
+
+
 def docx_para_elementos(caminho):
-    html = pypandoc.convert_file(caminho, 'html', extra_args=['--wrap=none'])
+    html = pypandoc.convert_file(corrigir_estilos(caminho), 'html', extra_args=['--wrap=none'])
     sopa = BeautifulSoup(html, 'html.parser')
     return [el for el in sopa.children if isinstance(el, Tag)]
 
@@ -102,6 +135,12 @@ def segmentar(elementos):
     for el in elementos:
         t = texto(el)
         if el.name in ('h1', 'h2', 'h3'):
+            # "18º Encontro" seguido do título "Celebração do Pão": o título pertence ao encontro
+            if (atual is not None and not atual['corpo']
+                    and (mn := RE_NUM_ENCONTRO.match(atual['titulo_bruto'])) and not mn.group(2).strip()):
+                el.name = 'h4'
+                atual['corpo'].append(el)
+                continue
             if RE_INICIO_SEGMENTO.match(t):
                 atual = {'titulo_bruto': t, 'corpo': []}
                 segmentos.append(atual)
@@ -144,8 +183,12 @@ def extrair(seg, relatorio):
     corpo = seg['corpo']
     m = RE_NUM_ENCONTRO.match(seg['titulo_bruto'])
     numero, titulo = (int(m.group(1)), m.group(2).strip()) if m else (None, seg['titulo_bruto'])
-    if m and not titulo and corpo and corpo[0].name == 'p':
+    if m and not titulo and corpo and corpo[0].name in ('p', 'h4'):
         titulo = texto(corpo.pop(0))  # título na linha de baixo ("2º Encontro" / "Creio em Deus Pai…")
+    # subtítulo "Com os pais e padrinhos de Batismo" faz parte do título (distingue encontros homônimos)
+    if corpo and corpo[0].name in ('p', 'h4') and re.match(r'^Com os pais\b', texto(corpo[0]), re.I):
+        sub = texto(corpo.pop(0)).rstrip('.')
+        titulo = titulo.rstrip(' .–—-') + ' — ' + sub[0].lower() + sub[1:]
     titulo = titulo.strip(' .–—-')
     tipo = 'celebracao' if re.match(r'celebra[çc][ãa]o', titulo if numero else seg['titulo_bruto'], re.I) else 'encontro'
 
@@ -194,6 +237,10 @@ def materiais_de(fora):
         filhos = [c for c in el.children if not (isinstance(c, NavigableString) and not c.strip())]
         return el.name == 'p' and len(filhos) == 1 and getattr(filhos[0], 'name', None) in ('strong', 'b')
 
+    # só o nível de título mais alto abre um novo texto; os demais viram subtítulos
+    niveis = [int(el.name[1]) for el in fora
+              if el.name in ('h1', 'h2', 'h3') and not RE_SEM_MATERIAL.match(texto(el))]
+    topo = f'h{min(niveis)}' if niveis else 'h3'
     itens, atual, pular = [], None, False
     for i, el in enumerate(fora):
         if pular:
@@ -208,15 +255,19 @@ def materiais_de(fora):
                 pular = True
             atual = {'titulo': titulo, 'corpo': []}
             itens.append(atual)
-        elif el.name in ('h1', 'h2', 'h3'):
+        elif el.name == topo or (el.name in ('h1', 'h2', 'h3') and (atual is None or RE_SEM_MATERIAL.match(texto(el)))):
             atual = {'titulo': texto(el), 'corpo': []}
             itens.append(atual)
         elif atual is not None:
+            if el.name in ('h1', 'h2', 'h3'):
+                el.name = 'h4'
             for a in ('id', 'class'):
                 if el.has_attr(a):
                     del el[a]
             atual['corpo'].append(str(formatar_rotulos(el)))
-    return [{'titulo': i['titulo'], 'conteudo_html': '\n'.join(i['corpo'])}
+    def titulo_legivel(t):
+        return t[0] + t[1:].lower() if t.isupper() else t  # "OS ENCONTROS E SUA…" -> "Os encontros e sua…"
+    return [{'titulo': titulo_legivel(i['titulo']), 'conteudo_html': '\n'.join(i['corpo'])}
             for i in itens if i['corpo'] and not RE_SEM_MATERIAL.match(i['titulo'])]
 
 
